@@ -1,0 +1,10 @@
+pandas
+openai
+ollama
+fastapi
+uvicorn
+requests
+sqlalchemy
+perplexityai
+python-dotenv
+psycopg2-binary 

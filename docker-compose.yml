@@ -1,0 +1,83 @@
+services:
+
+  db:
+    image: postgres:15
+    container_name: data
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: mulsterdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  ollama:
+    image: ollama/ollama:latest
+    build:
+      dockerfile: dockerfiles/Dockerfile-llama
+    container_name: llama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+  
+  mcp-server:
+    image: mcp/memory
+    container_name: mcp
+    ports:
+      - "8001:8001"
+    
+  mcp-bridge:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile-bridge
+    container_name: bridge
+    env_file: .ngrok
+    working_dir: /bridge
+    volumes:
+      - .:/bridge # ← optional; remove for production
+      - ./data:/bridge/data   # persistent MCP context
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mcp-server
+    environment:
+      NGROK_AUTH_TOKEN: ${NGROK_AUTH_TOKEN}
+      MCP_URL: http://mcp-memory:8001
+    command: tail -f /dev/null
+
+  app:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile-app
+    container_name: auto
+    env_file: .env
+    working_dir: /app
+    volumes:
+      - .:/app # ← optional; remove for production
+    depends_on:
+      - db
+      - mcp-bridge
+      - ollama
+    environment:
+      DB_HOST: data
+      DB_USER: admin
+      DB_PASSWORD: 1234
+      DB_NAME: mulsterdb
+      OLLAMA_HOST: http://ollama:11434
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY}
+    command: tail -f /dev/null
+
+volumes:
+  ollama_data:
+  db_data:
