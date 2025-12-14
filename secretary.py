@@ -5,6 +5,8 @@ import pandas as pd
 from pathlib import Path
 from sqlalchemy import create_engine, text
 
+base_path = os.path.dirname(os.path.abspath(__file__))
+
 class Secretary():
 
     def __init__(self):
@@ -89,41 +91,37 @@ class Secretary():
         logging.info(f"✅ Copied files for processing. \n")
 
     def clean_errors(self, supercategories: list[str]):
-        pwd_base = Path.cwd()
         logging.info(f"🗑 Removing all error CSV files for {len(supercategories)} supercategories \n")
         for supercategory in supercategories:
-            file_exists = os.path.isfile(os.path.join(pwd_base, f"{supercategory}/errors.csv"))
+            file_exists = os.path.isfile(os.path.join(base_path, f"{supercategory}/errors.csv"))
             if file_exists:
-                os.remove(os.path.join(pwd_base, f"{supercategory}/errors.csv"))
+                os.remove(os.path.join(base_path, f"{supercategory}/errors.csv"))
 
     def clean_outputs(self, supercategories: list[str]):
-        pwd_base = Path.cwd()
         logging.info(f"🗑 Removing all output CSV files for {len(supercategories)} supercategories")
         for supercategory in supercategories:
-            for file in os.listdir(os.path.join(pwd_base, f"{supercategory}/outputs/")):
+            for file in os.listdir(os.path.join(base_path, f"{supercategory}/outputs/")):
                 try:
-                    os.remove(os.path.join(pwd_base, f"{supercategory}/outputs/{file}"))
+                    os.remove(os.path.join(base_path, f"{supercategory}/outputs/{file}"))
                 except Exception as e:
                     logging.error(f"❌ Error reading {file}: {e}")
                     return 1
 
     def clean_answers(self, supercategories: list[str]):
-        pwd_base = Path.cwd()
         logging.info(f"🗑 Removing all answer files for {len(supercategories)} supercategories \n")
         for supercategory in supercategories:
-            for file in os.listdir(os.path.join(pwd_base, f"{supercategory}/answers/")):
+            for file in os.listdir(os.path.join(base_path, f"{supercategory}/answers/")):
                 try:
-                    os.remove(os.path.join(pwd_base, f"{supercategory}/answers/{file}"))
+                    os.remove(os.path.join(base_path, f"{supercategory}/answers/{file}"))
                 except Exception as e:
                     logging.error(f"❌ Error reading {file}: {e}")
                     return 1
 
     def clean_prices(self, supercategories: list[str]):
-        pwd_base = Path.cwd()
         logging.info(f"🗑 Removing all prices from output files for {len(supercategories)} supercategories \n")
         for supercategory in supercategories:
             try:
-                output_path = os.path.join(pwd_base, f"{supercategory}/outputs/")
+                output_path = os.path.join(base_path, f"{supercategory}/outputs/")
             except Exception as e:
                 logging.error(f"❌ Error reading {error_path}: {e}")
                 return 1
@@ -138,14 +136,13 @@ class Secretary():
                     return 1
         
     def concatenate_outputs(self, supercategories: list[str]):
-        pwd_base = Path.cwd()
         all_dataframes = []
         error_dataframes = []
         logging.info(f"🔍 Gathering CSV files from {len(supercategories)} supercategories")
         for supercategory in supercategories:
             try:
-                error_path = os.path.join(pwd_base, f"{supercategory}/errors.csv")
-                output_path = os.path.join(pwd_base, f"{supercategory}/outputs/")
+                error_path = os.path.join(base_path, f"{supercategory}/errors.csv")
+                output_path = os.path.join(base_path, f"{supercategory}/outputs/")
                 file_exists = os.path.isfile(error_path)
                 if file_exists:
                     edf = pd.read_csv(error_path)
@@ -168,8 +165,8 @@ class Secretary():
         try:
             combined_df = pd.concat(all_dataframes, ignore_index=True)
             combined_edf = pd.concat(error_dataframes, ignore_index=True)
-            autologue_path = pwd_base / "_catalogue" / "autologue.csv"
-            errors_path = pwd_base / "_catalogue" / "errors.csv"
+            autologue_path = base_path / "_catalogue" / "autologue.csv"
+            errors_path = base_path / "_catalogue" / "errors.csv"
             combined_df.to_csv(autologue_path, index=False)
             combined_edf.to_csv(errors_path, index=False)
             logging.info(f"📊 Concatenated {len(all_dataframes)} files with {len(combined_df)} total rows")

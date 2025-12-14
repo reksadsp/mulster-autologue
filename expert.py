@@ -53,9 +53,9 @@ class InstrumentData:
             'weight_kg': self.dimensions[3],
             'technical_specs': self.technical_specs or 'N/A',
             'technical_doc': self.technical_doc or 'N/A',
-            'confidence_score': self.confidence_score or 'N/A',
-            'llm2llm_score': self.llm2llm_score or 'N/A',
-            'retries_number': self.retries_number or 0
+            'confidence_score': self.confidence_score or '0.0',
+            'llm2llm_score': self.llm2llm_score or '0.0',
+            'retries_number': self.retries_number or '0'
         }
 
 class Expert():
@@ -64,10 +64,23 @@ class Expert():
         load_dotenv()
         self.tools = tools
         self.dimensions_prompt = []
-        self.P_client = Perplexity()
-        self.O_client = ollama.Client(host='http://ollama:11434')
-        self.M_client = MCPClient('https://fattily-synetic-arnold.ngrok-free.dev')
+        try:
+            self.P_client = Perplexity()
+            logging.info("✅ Perplexity Client Enbled \n")
+        except Exception as e:
+            logging.error("❌ Perplexity Client Error: {e} \n")
+        try:
+            self.O_client = ollama.Client(host='http://ollama:11434')
+            logging.info("✅ Ollama Client Enbled \n")
+        except Exception as e:
+            logging.error("❌ Ollama Client Error: {e} \n")
+        try:
+            self.M_client = MCPClient('https://fattily-synetic-arnold.ngrok-free.dev')
+            logging.info("✅ MCP Client Enbled \n")
+        except Exception as e:
+            logging.error("❌ MCP Client Error: {e} \n")
         self.errors_file = os.path.join(self.output_path, "../errors.csv")
+        self.context = self._load_context(os.path.join(self.source_path, "context.json"))
         self.price_prompt = self._fetch_prompt(os.path.join(base_path,"prompt-price.md"))
         self.agent_prompt = self._fetch_prompt(os.path.join(self.source_path,"prompt-agent.md"))
         self.technical_prompt = self._fetch_prompt(os.path.join(base_path,"prompt-technical.md"))
@@ -85,6 +98,7 @@ class Expert():
             filename_without_ext = os.path.splitext(file)[0]
             self.category = filename_without_ext.removeprefix("input_")
             self.output_file = os.path.join(self.output_path, f"output_{self.category}.csv")
+            logging.info(f"✅ Researching informations for: {self.category} \n")
             self.process_file()
 
     def process_file(self):
@@ -135,14 +149,15 @@ class Expert():
             if self._validate_instrument_data(instrument_data):
                 self._update_context(instrument_data, True)
                 instrument_data.confidence_score = self._verif_confidence(instrument_data)
-                instrument_data.llm2llm_score = self._verif_llm2llm(instrument_data)
+                instrument_data.llm2llm_score = 0.0 #self._verif_llm2llm(instrument_data)
                 logging.info(f"✅ {instrument_data.name} processed. \n")
                 self._write_instrument(instrument_data, self.output_file)
             else:
                 self._update_context(instrument_data, False)
                 instrument_data.retries_number = self._check_retries(instrument_data)
-                if instrument_data.retries_number > 5:
+                if instrument_data.retries_number > 4:
                     instrument_data.confidence_score = 0.0
+                    instrument_data.llm2llm_score = 0.0
                     logging.error(f"❌ Research for {instrument_data.name} incomplete, exitting. \n")
                     self._write_instrument(instrument_data, self.output_file)
                 else:
@@ -235,49 +250,51 @@ class Expert():
                         elif dim_diff_percent > 120:
                             compute_score -= 12.5
         confidence_score = max(0.0, compute_score)
+        confidence_score = min(confidence_score, 100)
         confidence_score = round(confidence_score, 2)
         return confidence_score
 
     def _verif_llm2llm(self, instrument_data: InstrumentData) -> float:
         compute_score = 100.0
-        # Description analysis (lama)
+        # Description analysis
         try:
-            prompt = f"""Donne une note sur 20 à cette description de produit: {instrument_data.description}"""
+            prompt = f"""Donne une note sur 33 à cette description de produit: {instrument_data.description}"""
             response = self._chat_llama_with_retry(prompt, 3)
             desc_note = float(self._extract_last_number(response))
             logging.info(f"Description score: {desc_note}")
         except Exception as e:
             logging.error(f"Error analyzing description: {e}")
-            desc_note = 20
-        # Technical analysis (lama)
+            desc_note = 33
+        # Technical analysis
         try:
-            prompt = f"""Donne une note sur 20 à cette spécification technique de produit: {instrument_data.technical_specs}"""
+            prompt = f"""Donne une note sur 33 à cette spécification technique de produit: {instrument_data.technical_specs}"""
             response = self._chat_llama_with_retry(prompt, 3)
             tech_note = float(self._extract_last_number(response))
-            logging.info(f"Description score: {desc_note}")
+            logging.info(f"Specs score: {tech_note}")
         except Exception as e:
             logging.error(f"Error analyzing specifications: {e}")
-            tech_note = 20
-        # Documentation analysis (lama)
+            tech_note = 33
+        # Documentation analysis
         try:
             response = requests.get(instrument_data.technical_doc)
             html = response.text
-            prompt = f"""Donne une note sur 20 à cette documentation de produit: {html}"""
+            prompt = f"""Donne une note sur 33 à cette documentation de produit: {html}"""
             response = self._chat_llama_with_retry(prompt, 3)
             doc_note = float(self._extract_last_number(response))
-            logging.info(f"Description score: {desc_note}")
+            logging.info(f"Doc score: {doc_note}")
         except Exception as e:
             logging.error(f"Error analyzing documentation: {e}")
-            doc_note = 20
-        compute_score -= (20 - desc_note + 20 - tech_note + 20 - doc_note)
+            doc_note = 33
+        compute_score -= (desc_note + tech_note + doc_note)
         llm2llm_score = max(0.0, compute_score)
+        llm2llm_score = min(llm2llm_score, 100)
         llm2llm_score = round(confidence_score, 2)
         return llm2llm_score
         
     def _chat_perplexity(self, prompt, instrument) -> str:
         system_parts = [
             self.agent_prompt,
-            f"\n## Utilise les outils de mémorisation de la section 'tools' grâce à cet URL : https://fattily-synetic-arnold.ngrok-free.dev pour enregistrer de manière persistantes tes connaissances pertinentes et ainsi améliorer ton expertise.",
+            f"\n## Utilise les outils de mémorisation de la section 'tools' grâce à cet URL : https://fattily-synetic-arnold.ngrok-free.dev pour enregistrer de manière persistantes tes connaissances et ainsi améliorer ton expertise.",
         ]
         if prompt:
             system_parts.append(f"\n## Tâche de recherche : \n{prompt}")

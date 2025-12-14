@@ -1,0 +1,1 @@
+{"Puissance":"1400W RMS","Réponse en fréquence":"40Hz - 16kHz","Sensibilité":"104dB 1W/1m","Impédance":"4Ω","Connectique":"1 Neutrik Speakon et 2 jacks 1/4\"","Haut-parleurs":"8 x 10\" cast frame woofers","Tweeter":"Phénolique avec phase plug intégrée","Crossover":"Personnalisé avec contrôle variable du tweeter"}

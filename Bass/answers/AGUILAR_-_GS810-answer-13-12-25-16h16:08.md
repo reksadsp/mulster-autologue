@@ -1,0 +1,1 @@
+Le **Aguilar GS810** délivre un son **Aguilar signature** puissant et musical, avec des **médiums agressifs** pour percer les mixes denses, des graves profonds et des aigus étendus. Construit en **bouleau balte 13 plis** robuste, équipé de 8 haut-parleurs 10" custom Eminence, il excelle sur les grandes scènes et tournées.[1][2]

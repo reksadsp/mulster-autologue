@@ -117,8 +117,9 @@ fi
 echo -e "🎉 Mulster autologue system ready!\n"
 
 echo "⚙️ Starting catalogue automatic refill..."
+# tail -f /dev/null
 docker exec -i auto bash -c "python main.py"
-
+tail -f /dev/null
 echo "Cleaning up containers..."
 docker-compose down
 docker rm bridge 2>/dev/null || true

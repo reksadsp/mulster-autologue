@@ -11,9 +11,45 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+  
+#  mcp-server:
+#    image: mcp/memory:latest
+#    container_name: mcp
+#    ports:
+#      - "8001:8001"
+
+  mcp-bridge:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile-bridge
+    container_name: bridge
+    env_file: .ngrok
+    working_dir: /bridge
+    volumes:
+      - mcp_data:/bridge/data
+    ports:
+      - "8000:8000"
+    environment:
+      NGROK_AUTH_TOKEN: ${NGROK_AUTH_TOKEN}
+      PYTHONUNBUFFERED: 1
+
+#  mcp-bridge:
+#    build:
+#      context: .
+#      dockerfile: dockerfiles/Dockerfile-bridge
+#    container_name: old-bridge
+#
+#    depends_on:
+#      - mcp-server
+#    environment:
+#
+#      MCP_URL: http://mcp-memory:8001
+#    command: tail -f /dev/null
 
   ollama:
     image: ollama/ollama:latest
+    mem_limit: 15g
+    memswap_limit: 20g
     build:
       dockerfile: dockerfiles/Dockerfile-llama
     container_name: llama
@@ -30,31 +66,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 10s
-  
-  mcp-server:
-    image: mcp/memory
-    container_name: mcp
-    ports:
-      - "8001:8001"
-    
-  mcp-bridge:
-    build:
-      context: .
-      dockerfile: dockerfiles/Dockerfile-bridge
-    container_name: bridge
-    env_file: .ngrok
-    working_dir: /bridge
-    volumes:
-      - .:/bridge # ← optional; remove for production
-      - ./data:/bridge/data   # persistent MCP context
-    ports:
-      - "8000:8000"
-    depends_on:
-      - mcp-server
-    environment:
-      NGROK_AUTH_TOKEN: ${NGROK_AUTH_TOKEN}
-      MCP_URL: http://mcp-memory:8001
-    command: tail -f /dev/null
 
   app:
     build:
@@ -63,12 +74,10 @@ services:
     container_name: auto
     env_file: .env
     working_dir: /app
-    volumes:
-      - .:/app # ← optional; remove for production
     depends_on:
       - db
-      - mcp-bridge
       - ollama
+      - mcp-bridge
     environment:
       DB_HOST: data
       DB_USER: admin
@@ -79,5 +88,6 @@ services:
     command: tail -f /dev/null
 
 volumes:
-  ollama_data:
   db_data:
+  mcp_data:
+  ollama_data:
