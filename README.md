@@ -5,6 +5,10 @@ Le script est prévu pour MacOS.
 ```Bash
 chmod +x install.sh && ./install.sh
 ```
+Il est nécesaire au bon fonctionnement du script d'ajouter deux fichiers .env et .ngrok à la racine du projet avec respectivement:
+
+PERPLEXITY_API_KEY=***
+NGROK_AUTH_TOKEN=***
 
 ## Utilisation:
 
