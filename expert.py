@@ -109,6 +109,7 @@ class Expert():
         for index, row in in_df.iterrows():
             instrument_data = object.__new__(InstrumentData)
             instrument_data.confidence_score = 0
+            instrument_data.llm2llm_score = 0
             instrument_data.retries_number = 0
             instrument_data.id = str(full_df.iloc[index, 0])
             instrument_data.name = str(full_df.iloc[index, 1])
@@ -126,7 +127,9 @@ class Expert():
         logging.info(f"✅ Researched {len(in_df)} rows → {self.output_file} \n")
 
     def _process_instrument(self, instrument_data: InstrumentData):
-        if instrument_data.name not in self.context["instruments_processed"]:
+        if instrument_data.name in self.context["instruments_processed"]:
+            return "Processed"
+        else:
             if instrument_data.description in (None, 'nan'):
                 logging.info(f"🔄 Searching a description for {instrument_data.name}.")
                 instrument_data.description = self._chat_perplexity(self.description_prompt, instrument_data.name)
@@ -161,6 +164,8 @@ class Expert():
                     logging.error(f"❌ Research for {instrument_data.name} incomplete, exitting. \n")
                     self._write_instrument(instrument_data, self.output_file)
                 else:
+                    instrument_data.confidence_score = 0.0
+                    instrument_data.llm2llm_score = 0.0
                     logging.warning(f"❎ Research for {instrument_data.name} failed, retrying... \n")
                     self._write_instrument(instrument_data, self.errors_file)
                     # Relaunch search

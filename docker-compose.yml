@@ -11,12 +11,6 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
-  
-#  mcp-server:
-#    image: mcp/memory:latest
-#    container_name: mcp
-#    ports:
-#      - "8001:8001"
 
   mcp-bridge:
     build:
@@ -32,19 +26,6 @@ services:
     environment:
       NGROK_AUTH_TOKEN: ${NGROK_AUTH_TOKEN}
       PYTHONUNBUFFERED: 1
-
-#  mcp-bridge:
-#    build:
-#      context: .
-#      dockerfile: dockerfiles/Dockerfile-bridge
-#    container_name: old-bridge
-#
-#    depends_on:
-#      - mcp-server
-#    environment:
-#
-#      MCP_URL: http://mcp-memory:8001
-#    command: tail -f /dev/null
 
   ollama:
     image: ollama/ollama:latest
