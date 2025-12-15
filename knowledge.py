@@ -1,14 +1,14 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, Dict
+import subprocess
+import requests
 import asyncio
-import json
-import os
 import uvicorn
 import logging
-import subprocess
+import json
 import time
-import requests
+import os
 import re
 
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +50,10 @@ class MCPClient:
         self.bridge_url = bridge_url.rstrip("/")
         self.session = requests.Session()
         self.timeout = 30
+        self.session.headers.update({
+            "ngrok-skip-browser-warning": "true",
+            "User-Agent": "MCP-Client/1.0"
+        })
     
     def _request(self, method: str, endpoint: str, json_data: dict = None) -> dict:
         url = f"{self.bridge_url}{endpoint}"
@@ -124,27 +128,48 @@ app.add_middleware(
     allow_origins=["*"],  # Restrict this in production
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "ngrok-skip-browser-warning"],
 )
+
+# Middleware to add ngrok bypass headers to all responses
+@app.middleware("http")
+async def add_ngrok_headers(request: Request, call_next):
+    """Add ngrok bypass headers to prevent warning page"""
+    response = await call_next(request)
+    response.headers["ngrok-skip-browser-warning"] = "true"
+    response.headers["User-Agent"] = "MCP-Bridge/1.0"
+    return response
 
 class MCPStdioBridge:
     """Manages connection to MCP server via stdio (subprocess)"""
     
-    def __init__(self, command: str = "mcp-memory"):
+    def __init__(self, command: str = "mcp-memory", data_dir: str = "/bridge/data"):
         self.command = command
+        self.data_dir = data_dir
         self.process = None
         self.lock = asyncio.Lock()
     
     async def start(self):
         """Start the MCP server subprocess"""
         try:
+            # Create data directory if it doesn't exist
+            os.makedirs(self.data_dir, exist_ok=True)
+            
+            # Set up environment with data directory
+            env = os.environ.copy()
+            env["MCP_DATA_DIR"] = self.data_dir
+            env["DATA_DIR"] = self.data_dir
+            
+            # Start the MCP server
             self.process = await asyncio.create_subprocess_exec(
-                *self.command.split(),
+                self.command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             logger.info(f"MCP server started (PID: {self.process.pid})")
+            logger.info(f"Data directory: {self.data_dir}")
         except Exception as e:
             logger.error(f"Failed to start MCP server: {e}")
             raise
@@ -183,8 +208,8 @@ class MCPStdioBridge:
                 await self.process.wait()
                 logger.info("MCP server killed")
 
-# Initialize bridge
-mcp = MCPStdioBridge(command="mcp-memory")
+# Initialize bridge with data directory
+mcp = MCPStdioBridge(command="mcp-memory", data_dir="/bridge/data")
 
 # ==================== Startup/Shutdown ====================
 @app.on_event("startup")
@@ -332,6 +357,200 @@ async def reset():
 async def health():
     """Health check endpoint"""
     return {"status": "ok"}
+
+tools = [
+{
+  "type": "function",
+  "function": {
+    "name": "create_entities",
+    "description": "Create multiple new entities in the knowledge graph. Ignores entities with existing names.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "entities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "entityType": { "type": "string" },
+              "observations": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["name", "entityType"]
+          }
+        }
+      },
+      "required": ["entities"]
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "create_relations",
+    "description": "Create multiple new relations between entities. Skips duplicate relations.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "relations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": { "type": "string" },
+              "to": { "type": "string" },
+              "relationType": { "type": "string" }
+            },
+            "required": ["from", "to", "relationType"]
+          }
+        }
+      },
+      "required": ["relations"]
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "add_observations",
+    "description": "Add new observations to existing entities. Fails if entity doesn't exist.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "entityName": { "type": "string" },
+              "contents": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["entityName", "contents"]
+          }
+        }
+      },
+      "required": ["observations"]
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "delete_entities",
+    "description": "Remove entities and their relations. Silent if entity doesn't exist.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "entityNames": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["entityNames"]
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "delete_observations",
+    "description": "Remove specific observations from entities. Silent if observation doesn't exist.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "deletions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "entityName": { "type": "string" },
+              "observations": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["entityName", "observations"]
+          }
+        }
+      },
+      "required": ["deletions"]
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "delete_relations",
+    "description": "Remove specific relations from the graph. Silent if relation doesn't exist.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "relations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": { "type": "string" },
+              "to": { "type": "string" },
+              "relationType": { "type": "string" }
+            },
+            "required": ["from", "to", "relationType"]
+          }
+        }
+      },
+      "required": ["relations"]
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "read_graph",
+    "description": "Read the entire knowledge graph, including all entities and relations.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "search_nodes",
+    "description": "Search for nodes based on query across names, types, and observation content.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" }
+      },
+      "required": ["query"]
+    }
+  }
+},
+{
+  "type": "function",
+  "function": {
+    "name": "open_nodes",
+    "description": "Retrieve specific nodes by name. Silently skips non-existent nodes.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["names"]
+    }
+  }
+}
+]
 
 # ==================== Run ====================
 if __name__ == "__main__":

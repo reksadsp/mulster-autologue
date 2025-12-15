@@ -18,7 +18,6 @@ from pathlib import Path
 import pandas as pd
 
 from knowledge import *
-from tool_call import *
 
 base_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -76,6 +75,10 @@ class Expert():
             logging.error("❌ Ollama Client Error: {e} \n")
         try:
             self.M_client = MCPClient('https://fattily-synetic-arnold.ngrok-free.dev')
+            self.M_client.session.headers.update({
+                "ngrok-skip-browser-warning": "true",
+                "User-Agent": "MCP-Client/1.0"
+            })
             logging.info("✅ MCP Client Enbled \n")
         except Exception as e:
             logging.error("❌ MCP Client Error: {e} \n")
@@ -185,6 +188,8 @@ class Expert():
         if instrument_data.price is None:
             return False
         if instrument_data.dimensions is None:
+            return False
+        if None in instrument_data.dimensions:
             return False
         if "0" in instrument_data.dimensions:
             return False
@@ -297,6 +302,7 @@ class Expert():
         return llm2llm_score
         
     def _chat_perplexity(self, prompt, instrument) -> str:
+        max_retries = 3
         system_parts = [
             self.agent_prompt,
             f"\n## Utilise les outils de mémorisation de la section 'tools' grâce à cet URL : https://fattily-synetic-arnold.ngrok-free.dev pour enregistrer de manière persistantes tes connaissances et ainsi améliorer ton expertise.",
@@ -309,54 +315,60 @@ class Expert():
         ]
         try:
             result = self.P_client.chat.completions.create(
-                messages=messages,
-                max_tokens=300,
                 model="sonar-pro",
-                tools=self.tools
+                messages=messages,
+                tools=self.tools,
+                max_tokens=300
             )
+            # Handle tool calls in a loop
             while result.choices[0].message.tool_calls:
                 tool_call = result.choices[0].message.tool_calls[0]
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
-                result = execute_tool(tool_name, tool_args)
-                messages.append({"role": "assistant", "content": result.choices[0].message.content})
+                # Execute the tool via the bridge
+                logging.info(f"Executing tool: {tool_name} with args: {tool_args}")
+                tool_result = execute_tool(tool_name, tool_args)
+                # Add assistant's tool use to messages
+                messages.append({
+                    "role": "assistant",
+                    "content": result.choices[0].message.content or ""
+                })
+                # Add tool result to messages
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": result
+                    "content": tool_result  # ← The actual tool result, not the URL
                 })
-                result = client.chat.completions.create(
+                # Continue the conversation with the tool result
+                result = self.P_client.chat.completions.create(
                     model="sonar-pro",
                     messages=messages,
-                    tools=tools
+                    tools=self.tools,
+                    max_tokens=300
                 )
+            # Extract final text response
             if result.choices and len(result.choices) > 0:
                 full_response = result.choices[0].message.content
                 if full_response:
+                    # Save the response to file
                     os.makedirs(self.answer_path, exist_ok=True)
                     timestamp = datetime.now().strftime("%d-%m-%y-%Hh%M:%S")
+                    # Clean filename
                     filename = re.sub(r'[<>:"/\\|?*]', '', instrument)
-                    filename = filename.replace(' ', '_')
-                    filename = filename.strip('. ')
-                    answer_file = os.path.join(self.answer_path, f"{filename}-answer-{timestamp}.md")
+                    filename = filename.replace(' ', '_').strip('. ')
+                    answer_file = os.path.join(
+                        self.answer_path,
+                        f"{filename}-answer-{timestamp}.md"
+                    )
                     with open(answer_file, "w", encoding="utf-8") as f:
                         f.write(full_response)
+                    logging.info(f"Answer saved to: {answer_file}")
                     return full_response
             return None
-        except perplexity.BadRequestError as e:
-            logging.error(f"Invalid search parameters: {e}")
-            return None
-        except perplexity.APIStatusError as e:
-            # logging.error(f"API error: {e.status_code}")
+            
+        except Exception as e:
+            logging.error(f"Error in _chat_perplexity: {type(e).__name__}: {e}")
             return "Error"
-        except perplexity.RateLimitError:
-            if attempt < max_retries - 1:
-                delay = (2 ** attempt) + random.uniform(0, 1)
-                logging.warning(f"Rate limited, retrying in {delay:.2f}s...")
-                time.sleep(delay)
-            else:
-                logging.error("Max retries reached due to rate limiting")
-                return None
 
     def _chat_llama_with_retry(self, prompt, max_retries=3):
         for attempt in range(max_retries):
@@ -405,15 +417,13 @@ class Expert():
             return False
             
     def _load_context(self, context_file=None):
-        try:
-            if context_file and os.path.isfile(context_file):
-                with open(context_file, "r", encoding="utf-8") as f:
-                    self.context = json.load(f)
-                return True
-            return False
-        except Exception as e:
-            logging.error(f"Failed to load context file: {e}")
-            return False
+        if context_file and os.path.isfile(context_file):
+            with open(context_file, "r", encoding="utf-8") as f:
+                self.context = json.load(f)
+            return self.context
+        else:
+            self._reset_context(context_file)
+            return self.context
 
     def _write_instrument(self, instrument_data: InstrumentData, output_file: str):
         try:
@@ -474,6 +484,8 @@ class Expert():
         return text
         
     def _extract_first_paragraph(self, text: str) -> Optional[str]:
+        if not isinstance(text, str):
+            return None
         cleaned = self._clean_citations(text)
         cleaned = self._clean_markdown(cleaned)
         cleaned = cleaned.replace('"', '')
@@ -485,6 +497,8 @@ class Expert():
         return None
 
     def _extract_last_number(self, text: str) -> Optional[str]:
+        if not isinstance(text, str):
+            return None
         cleaned = self._clean_citations(text)
         bold_pattern = r'\*\*(\d+(?:[.,]\d+)?)\*\*'
         bold_matches = re.findall(bold_pattern, text)
@@ -497,6 +511,8 @@ class Expert():
         return None
 
     def _extract_last_url(self, text: str) -> Optional[str]:
+        if not isinstance(text, str):
+            return None
         cleaned = self._clean_citations(text)
         pattern = r'https?://[^\s*\)\]\}]+'
         matches = re.findall(pattern, cleaned)
@@ -505,9 +521,8 @@ class Expert():
         return None
     
     def _extract_last_json(self, text) -> Optional[Dict]:
-        if not isinstance(text, str):
-            text = json.dumps(text)
-        # First, try to extract JSON from code blocks
+        if isinstance(text, (dict, list)):
+            return text
         code_block_pattern = r'```(?:json)?\s*(\{[^`]*\})\s*```'
         code_matches = re.findall(code_block_pattern, text, re.DOTALL)
         if code_matches:

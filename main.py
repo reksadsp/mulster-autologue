@@ -223,7 +223,7 @@ class Sono (Expert):
 
 if __name__ == "__main__":
 
-    debug_autologue = True
+    debug_autologue = False
 
     # Instanciate agents
     secretary = Secretary()

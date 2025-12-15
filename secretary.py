@@ -138,7 +138,7 @@ class Secretary():
     def concatenate_outputs(self, supercategories: list[str]):
         all_dataframes = []
         error_dataframes = []
-        logging.info(f"🔍 Gathering CSV files from {len(supercategories)} supercategories")
+        logging.info(f"🔍 Gathering CSV files from {len(supercategories)} supercategories \n")
         for supercategory in supercategories:
             try:
                 error_path = os.path.join(base_path, f"{supercategory}/errors.csv")
@@ -165,8 +165,8 @@ class Secretary():
         try:
             combined_df = pd.concat(all_dataframes, ignore_index=True)
             combined_edf = pd.concat(error_dataframes, ignore_index=True)
-            autologue_path = base_path / "_catalogue" / "autologue.csv"
-            errors_path = base_path / "_catalogue" / "errors.csv"
+            autologue_path = os.path.join(base_path, "_catalogue/autologue.csv")
+            errors_path = os.path.join(base_path, "_catalogue/errors.csv")
             combined_df.to_csv(autologue_path, index=False)
             combined_edf.to_csv(errors_path, index=False)
             logging.info(f"📊 Concatenated {len(all_dataframes)} files with {len(combined_df)} total rows")
