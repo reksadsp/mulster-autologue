@@ -23,9 +23,9 @@ debug_autologue = True
 ```Python
 debug_autologue = False
 ```
-  Ajuster les marges de prix acceptables dans chaque sous-catégories d'expert:
+  Ajuster les marges de prix acceptables dans chaque sous-catégories d'recherche:
 ```Python
-    def _expert_filter(self, instrument_data: InstrumentData) -> bool:
+    def _recherche_filter(self, instrument_data: InstrumentData) -> bool:
         if instrument_data.category == "Tables de mixage":
             if float(instrument_data.price) < 100 or float(instrument_data.price) > 10000:
                 return False
@@ -38,7 +38,7 @@ debug_autologue = False
         return True
 ```
 
-expert.py:
+recherche.py:
   Le script ne peux fonctionner qu'avec le modèle 'sonar-pro' de Perplexity.
   Ajuster la limite de tokens par requête ici:
 ```Python
