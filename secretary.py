@@ -70,6 +70,7 @@ class Secretary():
             return "unknown"
         name = str(name).strip()
         name = re.sub(r"[^\w\-_.]", "_", name)
+        name = re.sub(r"\+", "&", name)
         return name or "unknown"
         
     def displace_data(self, supercategories: list[str]):

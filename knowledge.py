@@ -13,7 +13,6 @@ import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-app = FastAPI(title="MCP Bridge Server")
 
 # ==================== ngrok Management ====================
 def get_ngrok_url(retries: int = 10, delay: float = 1) -> Optional[str]:
@@ -78,7 +77,7 @@ class MCPClient:
         except Exception as e:
             logger.error(f"Request failed: {e}")
             raise
-    
+            
     # ============ Entities ============
     def create_entities(self, entities: list) -> dict:
         """Create entities in knowledge graph"""
@@ -122,6 +121,181 @@ class MCPClient:
         """Health check"""
         return self._request("GET", "/health")
 
+# ==================== MCP Bridge ====================
+class MCPStdioBridge:
+    """Manages connection to MCP server via stdio (subprocess)"""
+    
+    def __init__(self, command: str = "memory-mcp-server", data_dir: str = "/bridge/data/knowledge-graphi.jsonl"):
+        self.command = command
+        self.data_dir = data_dir
+        self.process = None
+        self.lock = asyncio.Lock()
+        self.initialized = False
+        self.request_id = 0
+    
+    async def start(self):
+        """Start the MCP server subprocess"""
+        try:
+            # Start with --path flag for memory-mcp-server
+            self.process = await asyncio.create_subprocess_exec(
+                self.command,
+                "--path", self.data_dir,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            logger.info(f"MCP server started (PID: {self.process.pid})")
+            logger.info(f"Data directory: {self.data_dir}")
+            
+            await asyncio.sleep(0.5)
+            await self._initialize_mcp()
+            
+        except Exception as e:
+            logger.error(f"Failed to start MCP server: {e}")
+            raise
+    
+    async def _initialize_mcp(self):
+        """Initialize MCP connection"""
+        try:
+            init_request = {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "mcp-bridge", "version": "1.0.0"}
+                },
+                "id": 1
+            }
+            
+            json_line = json.dumps(init_request) + "\n"
+            self.process.stdin.write(json_line.encode())
+            await self.process.stdin.drain()
+            
+            # Read lines until we get a valid JSON-RPC response
+            # (skip log lines that start with timestamps or don't contain jsonrpc)
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                response_line = await asyncio.wait_for(
+                    self.process.stdout.readline(), timeout=10.0
+                )
+                
+                if not response_line:
+                    raise RuntimeError("No initialization response from MCP server")
+                
+                response_text = response_line.decode().strip()
+                
+                # Skip empty lines or log lines
+                if not response_text or not response_text.startswith('{'):
+                    logger.debug(f"Skipping non-JSON line: {response_text[:100]}")
+                    continue
+                
+                try:
+                    response = json.loads(response_text)
+                    
+                    # Check if this is a JSON-RPC response (not a notification)
+                    if "jsonrpc" in response and "id" in response:
+                        if "error" in response:
+                            raise RuntimeError(f"MCP initialization failed: {response['error']}")
+                        
+                        logger.info("MCP server initialized successfully")
+                        logger.info(f"Server info: {response.get('result', {}).get('serverInfo', {})}")
+                        self.initialized = True
+                        return
+                    else:
+                        # This is a notification or other message, keep reading
+                        logger.debug(f"Received non-response message: {response_text[:100]}")
+                        continue
+                        
+                except json.JSONDecodeError:
+                    logger.debug(f"Skipping invalid JSON: {response_text[:100]}")
+                    continue
+            
+            raise RuntimeError("Failed to get valid initialization response after multiple attempts")
+            
+        except Exception as e:
+            logger.error(f"MCP initialization failed: {e}")
+            raise
+    
+    async def send(self, method: str, params: dict = None) -> dict:
+        """Send JSON-RPC request to MCP server"""
+        if not self.process or self.process.returncode is not None:
+            raise RuntimeError("MCP process is not running")
+        
+        if not self.initialized:
+            raise RuntimeError("MCP server not initialized")
+        
+        async with self.lock:
+            try:
+                self.request_id += 1
+                request = {
+                    "jsonrpc": "2.0",
+                    "method": method,
+                    "params": params or {},
+                    "id": self.request_id
+                }
+                
+                json_line = json.dumps(request) + "\n"
+                self.process.stdin.write(json_line.encode())
+                await self.process.stdin.drain()
+                
+                # Read lines until we get a valid JSON-RPC response
+                max_attempts = 10
+                for attempt in range(max_attempts):
+                    response_line = await asyncio.wait_for(
+                        self.process.stdout.readline(), timeout=30.0
+                    )
+                    
+                    if not response_line:
+                        raise RuntimeError("No response from MCP server")
+                    
+                    response_text = response_line.decode().strip()
+                    
+                    # Skip empty lines or non-JSON lines
+                    if not response_text or not response_text.startswith('{'):
+                        continue
+                    
+                    try:
+                        response = json.loads(response_text)
+                        
+                        # Check if this is the response to our request
+                        if "jsonrpc" in response and response.get("id") == self.request_id:
+                            if "error" in response:
+                                error = response["error"]
+                                raise RuntimeError(f"MCP error: {error.get('message', str(error))}")
+                            
+                            return response.get("result", {})
+                        else:
+                            # This is a notification or different response, keep reading
+                            continue
+                            
+                    except json.JSONDecodeError:
+                        # Skip invalid JSON lines
+                        continue
+                
+                raise RuntimeError("Failed to get valid response after multiple attempts")
+                
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout waiting for response to: {method}")
+                raise RuntimeError(f"MCP server timeout for method: {method}")
+            except Exception as e:
+                logger.error(f"Error communicating with MCP: {e}")
+                raise
+    
+    async def stop(self):
+        """Stop the MCP server"""
+        if self.process and self.process.returncode is None:
+            self.process.terminate()
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=5)
+                logger.info("MCP server stopped gracefully")
+            except asyncio.TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+
+# ==================== FastAPI App ====================
+app = FastAPI(title="MCP Bridge Server")
+
 # Enable CORS for external clients
 app.add_middleware(
     CORSMiddleware,
@@ -140,211 +314,38 @@ async def add_ngrok_headers(request: Request, call_next):
     response.headers["User-Agent"] = "MCP-Bridge/1.0"
     return response
 
-class MCPStdioBridge:
-    """Manages connection to MCP server via stdio (subprocess)"""
-    
-    def __init__(self, command: str = "mcp-memory", data_dir: str = "/bridge/data"):
-        self.command = command
-        self.data_dir = data_dir
-        self.process = None
-        self.lock = asyncio.Lock()
-    
-    async def start(self):
-        """Start the MCP server subprocess"""
-        try:
-            # Create data directory if it doesn't exist
-            os.makedirs(self.data_dir, exist_ok=True)
-            
-            # Set up environment with data directory
-            env = os.environ.copy()
-            env["MCP_DATA_DIR"] = self.data_dir
-            env["DATA_DIR"] = self.data_dir
-            
-            # Start the MCP server
-            self.process = await asyncio.create_subprocess_exec(
-                self.command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            logger.info(f"MCP server started (PID: {self.process.pid})")
-            logger.info(f"Data directory: {self.data_dir}")
-        except Exception as e:
-            logger.error(f"Failed to start MCP server: {e}")
-            raise
-    
-    async def send(self, command: dict) -> dict:
-        """Send JSON command to MCP via stdin and read response from stdout"""
-        if not self.process or self.process.returncode is not None:
-            raise RuntimeError("MCP process is not running")
-        
-        async with self.lock:
-            try:
-                # Send command as JSON line
-                json_line = json.dumps(command) + "\n"
-                self.process.stdin.write(json_line.encode())
-                await self.process.stdin.drain()
-                
-                # Read response line
-                response_line = await self.process.stdout.readline()
-                if not response_line:
-                    raise RuntimeError("No response from MCP server")
-                
-                return json.loads(response_line.decode())
-            except Exception as e:
-                logger.error(f"Error communicating with MCP: {e}")
-                raise
-    
-    async def stop(self):
-        """Stop the MCP server subprocess"""
-        if self.process and self.process.returncode is None:
-            self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), timeout=5)
-                logger.info("MCP server stopped gracefully")
-            except asyncio.TimeoutError:
-                self.process.kill()
-                await self.process.wait()
-                logger.info("MCP server killed")
-
 # Initialize bridge with data directory
-mcp = MCPStdioBridge(command="mcp-memory", data_dir="/bridge/data")
+mcp = MCPStdioBridge(command="memory-mcp-server", data_dir="/bridge/data/knowledge_graph.jsonl")
 
-# ==================== Startup/Shutdown ====================
 @app.on_event("startup")
 async def startup_event():
     """Start MCP server on app startup"""
     await mcp.start()
-    
-    # Get ngrok URL for external LLM clients
     ngrok_url = get_ngrok_url()
     if ngrok_url:
         logger.info(f"Bridge accessible at: {ngrok_url}")
         logger.info(f"External LLM clients should use: {ngrok_url}")
-    else:
-        logger.warning("Could not retrieve ngrok URL. Make sure ngrok is running.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Stop MCP server on app shutdown"""
     await mcp.stop()
 
-# ==================== Entities ====================
-@app.post("/entities")
-async def create_entities(request: Request):
-    """Create entities in the knowledge graph"""
-    data = await request.json()
-    entities = data.get("entities")
-    if not entities:
-        raise HTTPException(status_code=400, detail="Missing 'entities' field")
-    
-    payload = {"type": "create_entities", "entities": entities}
-    result = await mcp.send(payload)
-    return result
-
-@app.delete("/entities")
-async def delete_entities(request: Request):
-    """Delete entities from the knowledge graph"""
-    data = await request.json()
-    entity_names = data.get("entityNames")
-    if not entity_names:
-        raise HTTPException(status_code=400, detail="Missing 'entityNames' field")
-    
-    payload = {"type": "delete_entities", "entityNames": entity_names}
-    result = await mcp.send(payload)
-    return result
-
-# ==================== Relations ====================
-@app.post("/relations")
-async def create_relations(request: Request):
-    """Create relations between entities"""
-    data = await request.json()
-    relations = data.get("relations")
-    if not relations:
-        raise HTTPException(status_code=400, detail="Missing 'relations' field")
-    
-    payload = {"type": "create_relations", "relations": relations}
-    result = await mcp.send(payload)
-    return result
-
-@app.delete("/relations")
-async def delete_relations(request: Request):
-    """Delete relations between entities"""
-    data = await request.json()
-    relations = data.get("relations")
-    if not relations:
-        raise HTTPException(status_code=400, detail="Missing 'relations' field")
-    
-    payload = {"type": "delete_relations", "relations": relations}
-    result = await mcp.send(payload)
-    return result
-
-# ==================== Observations ====================
-@app.post("/observations")
-async def add_observations(request: Request):
-    """Add observations to entities"""
-    data = await request.json()
-    observations = data.get("observations")
-    if not observations:
-        raise HTTPException(status_code=400, detail="Missing 'observations' field")
-    
-    payload = {"type": "add_observations", "observations": observations}
-    result = await mcp.send(payload)
-    return result
-
-@app.delete("/observations")
-async def delete_observations(request: Request):
-    """Delete observations from entities"""
-    data = await request.json()
-    deletions = data.get("deletions")
-    if not deletions:
-        raise HTTPException(status_code=400, detail="Missing 'deletions' field")
-    
-    payload = {"type": "delete_observations", "deletions": deletions}
-    result = await mcp.send(payload)
-    return result
-
-# ==================== Graph ====================
-@app.get("/graph")
-async def read_graph():
-    """Read entire knowledge graph"""
-    payload = {"type": "read_graph"}
-    result = await mcp.send(payload)
-    return result
-
-# ==================== Nodes ====================
-@app.post("/nodes/search")
-async def search_nodes(request: Request):
-    """Search for nodes by query"""
-    data = await request.json()
-    query = data.get("query")
-    if not query:
-        raise HTTPException(status_code=400, detail="Missing 'query' field")
-    
-    payload = {"type": "search_nodes", "query": query}
-    result = await mcp.send(payload)
-    return result
-
-@app.post("/nodes/open")
-async def open_nodes(request: Request):
-    """Open/retrieve specific nodes by name"""
-    data = await request.json()
-    names = data.get("names")
-    if not names:
-        raise HTTPException(status_code=400, detail="Missing 'names' field")
-    
-    payload = {"type": "open_nodes", "names": names}
-    result = await mcp.send(payload)
-    return result
-
 # ==================== Utility ====================
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "ok"}
+
 @app.get("/status")
 async def status():
     """Check server status"""
-    if mcp.process and mcp.process.returncode is None:
-        return {"status": "running", "mcp_mode": "stdio"}
-    return {"status": "mcp_not_running", "mcp_mode": "stdio"}
+    return {
+        "status": "running",
+        "mcp_mode": "stdio",
+        "data_dir": mcp.data_dir,
+        "initialized": mcp.initialized
+    }
 
 @app.post("/reset")
 async def reset():
@@ -353,10 +354,188 @@ async def reset():
     result = await mcp.send(payload)
     return result
 
-@app.get("/health")
-async def health():
-    """Health check endpoint"""
-    return {"status": "ok"}
+@app.get("/tools")
+async def list_tools():
+    """List all available MCP tools"""
+    try:
+        result = await mcp.send("tools/list", {})
+        return result
+    except Exception as e:
+        logger.error(f"List tools failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/graph")
+async def read_graph():
+    """Read entire knowledge graph"""
+    try:
+        result = await mcp.send("tools/call", {
+            "name": "read_graph",
+            "arguments": {}
+        })
+        return result
+    except Exception as e:
+        logger.error(f"Read graph failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/entities")
+async def create_entities(request: Request):
+    """Create entities in the knowledge graph"""
+    try:
+        data = await request.json()
+        entities = data.get("entities")
+        if not entities:
+            raise HTTPException(status_code=400, detail="Missing 'entities' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "create_entities",
+            "arguments": {"entities": entities}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Create entities failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/entities")
+async def delete_entities(request: Request):
+    """Delete entities from the knowledge graph"""
+    try:
+        data = await request.json()
+        entity_names = data.get("entityNames")
+        if not entity_names:
+            raise HTTPException(status_code=400, detail="Missing 'entityNames' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "delete_entities",
+            "arguments": {"entityNames": entity_names}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete entities failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+        
+@app.post("/relations")
+async def create_relations(request: Request):
+    """Create relations between entities"""
+    try:
+        data = await request.json()
+        relations = data.get("relations")
+        if not relations:
+            raise HTTPException(status_code=400, detail="Missing 'relations' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "create_relations",
+            "arguments": {"relations": relations}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Create relations failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/relations")
+async def delete_relations(request: Request):
+    """Delete relations between entities"""
+    try:
+        data = await request.json()
+        relations = data.get("relations")
+        if not relations:
+            raise HTTPException(status_code=400, detail="Missing 'relations' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "delete_relations",
+            "arguments": {"relations": relations}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete relations failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/observations")
+async def add_observations(request: Request):
+    """Add observations to entities"""
+    try:
+        data = await request.json()
+        observations = data.get("observations")
+        if not observations:
+            raise HTTPException(status_code=400, detail="Missing 'observations' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "add_observations",
+            "arguments": {"observations": observations}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Add observations failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/observations")
+async def delete_observations(request: Request):
+    """Delete observations from entities"""
+    try:
+        data = await request.json()
+        deletions = data.get("deletions")
+        if not deletions:
+            raise HTTPException(status_code=400, detail="Missing 'deletions' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "delete_observations",
+            "arguments": {"deletions": deletions}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete observations failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/nodes/search")
+async def search_nodes(request: Request):
+    """Search for nodes by query"""
+    try:
+        data = await request.json()
+        query = data.get("query")
+        if not query:
+            raise HTTPException(status_code=400, detail="Missing 'query' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "search_nodes",
+            "arguments": {"query": query}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Search nodes failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/nodes/open")
+async def open_nodes(request: Request):
+    """Open specific nodes by name"""
+    try:
+        data = await request.json()
+        names = data.get("names")
+        if not names:
+            raise HTTPException(status_code=400, detail="Missing 'names' field")
+        
+        result = await mcp.send("tools/call", {
+            "name": "open_nodes",
+            "arguments": {"names": names}
+        })
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Open nodes failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 tools = [
 {

@@ -1,14 +1,14 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-import os, json, logging, subprocess, asyncio, uvicorn
+import os, json, logging, subprocess, asyncio, uvicorn, requests
 from datetime import datetime, timedelta
 from secretary import *
-from expert import *
+from researcher import *
 
 logging.basicConfig(level=logging.INFO)
 base_path = os.path.dirname(os.path.abspath(__file__))
 
-class Bass (Expert):
+class Bass (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "Bass/src/")
@@ -38,7 +38,7 @@ class Bass (Expert):
                 return False
         return True
 
-class DJ (Expert):
+class DJ (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "DJ/src/")
@@ -62,7 +62,7 @@ class DJ (Expert):
                 return False
         return True
         
-class Drums (Expert):
+class Drums (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "Drums/src/")
@@ -95,7 +95,7 @@ class Drums (Expert):
                 return False
         return True
         
-class Guitars (Expert):
+class Guitars (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "Guitars/src/")
@@ -129,7 +129,7 @@ class Guitars (Expert):
 
         return True
 
-class Keyboards (Expert):
+class Keyboards (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "Keyboards/src/")
@@ -168,7 +168,7 @@ class Keyboards (Expert):
                 return False
         return True
 
-class Mics (Expert):
+class Mics (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "Mics/src/")
@@ -184,7 +184,7 @@ class Mics (Expert):
             return False
         return True
 
-class Other (Expert):
+class Other (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "Other/src/")
@@ -200,7 +200,7 @@ class Other (Expert):
             return False
         return True
 
-class Sono (Expert):
+class Sono (Researcher):
     def __init__(self):
         self.session_id = "default"
         self.source_path = os.path.join(base_path, "Sono/src/")
@@ -223,19 +223,8 @@ class Sono (Expert):
 
 if __name__ == "__main__":
 
-    debug_autologue = False
-
-    # Instanciate agents
-    secretary = Secretary()
-    bass = Bass()
-    dj = DJ()
-    drums = Drums()
-    guitars = Guitars()
-    keyboards = Keyboards()
-    mics = Mics()
-    other = Other()
-    sono = Sono()
-    
+    debug_autologue = True
+   
     # Reset autologue
     if debug_autologue == True:
         # Reset outputs
@@ -272,6 +261,17 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Failed to read info file: {e}")
     
+    # Instanciate agents
+    secretary = Secretary()
+    bass = Bass()
+    dj = DJ()
+    #drums = Drums()
+    #guitars = Guitars()
+    #keyboards = Keyboards()
+    #mics = Mics()
+    #other = Other()
+    #sono = Sono()
+ 
     # Process catalogue
     logging.info("Processing 🐟 ... \n")
     bass.process_multiple_files()
@@ -279,16 +279,16 @@ if __name__ == "__main__":
     dj.process_multiple_files()
     logging.info("Processing 🥁 ... \n")
     drums.process_multiple_files()
-    logging.info("Processing 🎸 ... \n")
-    guitars.process_multiple_files()
-    logging.info("Processing 🎹 ... \n")
-    keyboards.process_multiple_files()
-    logging.info("Processing 🎤 ... \n")
-    mics.process_file()
-    logging.info("Processing 🛠 ... \n")
-    other.process_file()
-    logging.info("Processing 🔊 ... \n")
-    sono.process_multiple_files()
+            #logging.info("Processing 🎸 ... \n")
+        #guitars.process_multiple_files()
+            #logging.info("Processing 🎹 ... \n")
+        #keyboards.process_multiple_files()
+            #logging.info("Processing 🎤 ... \n")
+        #mics.process_file()
+            #logging.info("Processing 🛠 ... \n")
+        #other.process_file()
+            #logging.info("Processing 🔊 ... \n")
+        #sono.process_multiple_files()
     
     # Export outputs
-    secretary.concatenate_outputs(["Bass", "DJ", "Drums", "Guitars", "Keyboards", "Mics", "Other", "Sono"])
+    secretary.concatenate_outputs(["Bass", "DJ", "Drums"])

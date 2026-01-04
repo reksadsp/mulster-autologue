@@ -105,29 +105,30 @@ class Expert():
             self.process_file()
 
     def process_file(self):
-        full_df = pd.read_table(self.input_file)
-        full_df = full_df.map(lambda x: str(x).strip() if pd.notnull(x) else x)
-        in_df = full_df.copy()
-        in_df.drop(["id", "model", "description", "price", "length_cm", "height_cm", "width_cm", "weight_kg", "technical_specs", "technical_doc", "supercategory"], axis=1, inplace=True, errors="ignore")
-        for index, row in in_df.iterrows():
-            instrument_data = object.__new__(InstrumentData)
-            instrument_data.confidence_score = 0
-            instrument_data.llm2llm_score = 0
-            instrument_data.retries_number = 0
-            instrument_data.id = str(full_df.iloc[index, 0])
-            instrument_data.name = str(full_df.iloc[index, 1])
-            instrument_data.type = str(full_df.iloc[index, 2])
-            instrument_data.model = str(full_df.iloc[index, 3])
-            instrument_data.description = str(full_df.iloc[index, 4])
-            instrument_data.price = str(full_df.iloc[index, 5])
-            instrument_data.dimensions = [str(full_df.iloc[index, 6]), str(full_df.iloc[index, 7]), str(full_df.iloc[index, 8]), str(full_df.iloc[index, 9])]
-            instrument_data.technical_specs = str(full_df.iloc[index, 10])
-            instrument_data.technical_doc = str(full_df.iloc[index, 11])
-            instrument_data.category = str(full_df.iloc[index, 12])
-            if self._process_instrument(instrument_data) == "Error":
-                logging.error(f"❌ Research failed. \n")
-                break
-        logging.info(f"✅ Researched {len(in_df)} rows → {self.output_file} \n")
+        file_exists = os.path.isfile(self.output_file)
+        if not file_exists:
+            full_df = pd.read_table(self.input_file)
+            full_df = full_df.map(lambda x: str(x).strip() if pd.notnull(x) else x)
+            in_df = full_df.copy()
+            in_df.drop(["id", "model", "description", "price", "length_cm", "height_cm", "width_cm", "weight_kg", "technical_specs", "technical_doc", "supercategory"], axis=1, inplace=True, errors="ignore")
+            for index, row in in_df.iterrows():
+                instrument_data = object.__new__(InstrumentData)
+                instrument_data.confidence_score = 0
+                instrument_data.llm2llm_score = 0
+                instrument_data.retries_number = 0
+                instrument_data.id = str(full_df.iloc[index, 0])
+                instrument_data.name = str(full_df.iloc[index, 1])
+                instrument_data.type = str(full_df.iloc[index, 2])
+                instrument_data.model = str(full_df.iloc[index, 3])
+                instrument_data.description = str(full_df.iloc[index, 4])
+                instrument_data.price = str(full_df.iloc[index, 5])
+                instrument_data.dimensions = [str(full_df.iloc[index, 6]), str(full_df.iloc[index, 7]), str(full_df.iloc[index, 8]), str(full_df.iloc[index, 9])]
+                instrument_data.technical_specs = str(full_df.iloc[index, 10])
+                instrument_data.technical_doc = str(full_df.iloc[index, 11])
+                instrument_data.category = str(full_df.iloc[index, 12])
+                self._process_instrument(instrument_data)
+            logging.info(f"✅ Researched {len(in_df)} rows → {self.output_file} \n")
+        logging.info(f"✅ Skipping {self.input_file} \n")
 
     def _process_instrument(self, instrument_data: InstrumentData):
         if instrument_data.name in self.context["instruments_processed"]:
@@ -149,23 +150,25 @@ class Expert():
             if instrument_data.technical_doc in (None, 'nan'):
                 logging.info(f"🔄 Searching a documentation for {instrument_data.name}.")
                 instrument_data.technical_doc = self._chat_perplexity(self.documentation_prompt, instrument_data.name)
-            # Test search results
-            if "Error" in (instrument_data.description, instrument_data.price, instrument_data.dimensions[0], instrument_data.dimensions[1], instrument_data.dimensions[2], instrument_data.dimensions[3], instrument_data.technical_specs, instrument_data.technical_doc):
-                return "Error"
+
             if self._validate_instrument_data(instrument_data):
-                self._update_context(instrument_data, True)
                 instrument_data.confidence_score = self._verif_confidence(instrument_data)
-                instrument_data.llm2llm_score = 0.0 #self._verif_llm2llm(instrument_data)
+                instrument_data.llm2llm_score = 0.0 #TODO: self._verif_llm2llm(instrument_data)
                 logging.info(f"✅ {instrument_data.name} processed. \n")
                 self._write_instrument(instrument_data, self.output_file)
+                self._update_context(instrument_data, True)
             else:
-                self._update_context(instrument_data, False)
                 instrument_data.retries_number = self._check_retries(instrument_data)
-                if instrument_data.retries_number > 4:
+                # Test search results
+                if "Error" in (instrument_data.description, instrument_data.price, instrument_data.dimensions[0], instrument_data.dimensions[1], instrument_data.dimensions[2], instrument_data.dimensions[3], instrument_data.technical_specs, instrument_data.technical_doc):
+                    logging.error(f"❌ Research for {instrument_data.name} failed, exitting. \n")
+                    return "Error"
+                elif instrument_data.retries_number > 4:
                     instrument_data.confidence_score = 0.0
                     instrument_data.llm2llm_score = 0.0
                     logging.error(f"❌ Research for {instrument_data.name} incomplete, exitting. \n")
                     self._write_instrument(instrument_data, self.output_file)
+                    self._update_context(instrument_data, False)
                 else:
                     instrument_data.confidence_score = 0.0
                     instrument_data.llm2llm_score = 0.0
@@ -200,6 +203,7 @@ class Expert():
         if instrument_data.technical_doc is None:
             return False
         if not self._expert_filter(instrument_data):
+            instrument_data.price = 'nan'
             return False
         return True
 
@@ -245,6 +249,7 @@ class Expert():
                     avg_dim = 0
                     for i in range(4):
                         clean_dim = re.sub(r'[<>:"/\\|?*]', '', instrument_data.dimensions[i])
+                        clean_dim = re.sub(r',', '.', instrument_data.dimensions[i])
                         new_dim = float(clean_dim)
                         for j in range(len(cached_dimensions)):
                             avg_dim += cached_dimensions[j][i]
@@ -513,16 +518,18 @@ class Expert():
     def _extract_last_url(self, text: str) -> Optional[str]:
         if not isinstance(text, str):
             return None
+
         cleaned = self._clean_citations(text)
-        pattern = r'https?://[^\s*\)\]\}]+'
+        pattern = r'https?://[^\s\)\]\}>,]+'
         matches = re.findall(pattern, cleaned)
-        if matches:
-            return matches[-1]
-        return None
+
+        return matches[-1] if matches else None
     
     def _extract_last_json(self, text) -> Optional[Dict]:
         if isinstance(text, (dict, list)):
             return text
+        text = self._clean_markdown(text)
+        text = self._clean_citations(text)
         code_block_pattern = r'```(?:json)?\s*(\{[^`]*\})\s*```'
         code_matches = re.findall(code_block_pattern, text, re.DOTALL)
         if code_matches:
