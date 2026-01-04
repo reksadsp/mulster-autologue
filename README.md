@@ -5,9 +5,10 @@ Le script est prévu pour MacOS.
 ```Bash
 chmod +x install.sh && ./install.sh
 ```
-Il est nécesaire au bon fonctionnement du script d'ajouter deux fichiers .env et .ngrok à la racine du projet avec respectivement:
+Il est nécesaire d'ajouter, à la racine du projet, deux fichiers .env et .ngrok avec respectivement:
 
 PERPLEXITY_API_KEY=***
+	et
 NGROK_AUTH_TOKEN=***
 
 ## Utilisation:
@@ -23,7 +24,7 @@ debug_autologue = True
 ```Python
 debug_autologue = False
 ```
-  Ajuster les marges de prix acceptables dans chaque sous-catégories d'recherche:
+  Ajuster les marges de prix < et > acceptables, dans chaque sous-catégories de recherche:
 ```Python
     def _recherche_filter(self, instrument_data: InstrumentData) -> bool:
         if instrument_data.category == "Tables de mixage":
@@ -38,7 +39,7 @@ debug_autologue = False
         return True
 ```
 
-recherche.py:
+researcher.py:
   Le script ne peux fonctionner qu'avec le modèle 'sonar-pro' de Perplexity.
   Ajuster la limite de tokens par requête ici:
 ```Python
